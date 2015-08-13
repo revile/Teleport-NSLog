@@ -17,8 +17,8 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
     LogRotator *_logRotator;
     dispatch_queue_t _logReapingQueue;
     dispatch_source_t _timer;
-    NSUUID *_uuid;
     id <Forwarder> _forwarder;
+    NSString *_deviceName;
 }
 
 @end
@@ -29,7 +29,7 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
 {
     [NSException raise:@"Only initWithLogRotator is allowed" format:@"Hello Apple, can you give us a better way of preventing wrong init methods being called?"];
     return nil;
-
+    
 }
 
 - (id) initWithLogRotator:(LogRotator *)logRotator AndForwarder:(SimpleHttpForwarder *)forwarder
@@ -38,9 +38,15 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
     {
         _logRotator = logRotator;
         _forwarder = forwarder;
-
-        _uuid = [[UIDevice currentDevice] identifierForVendor];
-        [TeleportUtils teleportDebug:@"UUID: %@", _uuid];
+        _deviceName = [[UIDevice currentDevice].name stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+        _deviceName = (NSString *)CFBridgingRelease(CFURLCreateStringByAddingPercentEscapes(
+                                                                                            NULL,
+                                                                                            (CFStringRef)_deviceName,
+                                                                                            NULL,
+                                                                                            (CFStringRef)@"!*'();:@&=+$,/?%#[]",
+                                                                                            kCFStringEncodingUTF8 ));
+        
+        [TeleportUtils teleportDebug:@"Device identifier: %@", _deviceName];
         _logReapingQueue = dispatch_queue_create(TP_LOG_REAPING_QUEUE_NAME, DISPATCH_QUEUE_SERIAL);
         [TeleportUtils teleportDebug:@"Reaping Queue: %@", _logReapingQueue];
         
@@ -68,29 +74,29 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
 - (void)reap
 {
     [TeleportUtils teleportDebug:@"Log reaping woke up"];
-
+    
     if ([_logRotator currentLogFilePath] == nil) {
         [TeleportUtils teleportDebug:@"Rotator is not ready yet. Nothing to be done"];
         return;
     }
-
+    
     NSArray *sortedFiles = [self getSortedFilesWithSuffix:[_logRotator logPathSuffix] fromFolder:[_logRotator logDir]];
     
     [TeleportUtils teleportDebug:[NSString stringWithFormat:@"# of log files found: %lu", (unsigned long)sortedFiles.count]];
-
+    
     if (sortedFiles.count < 1)
         return;
-
+    
     NSString *oldestFile = [[sortedFiles objectAtIndex:0] objectForKey:@"path"];
     // when the oldest file is current log file, nothing to reap
     if ([oldestFile isEqualToString:[_logRotator currentLogFilePath]])
         return;
-
+    
     [TeleportUtils teleportDebug:[NSString stringWithFormat:@"Oldest log file: %@", oldestFile]];
-
+    
     // Only reap 1 log file, the oldest one, at a time
     @try {
-        [_forwarder forwardLog:[NSData dataWithContentsOfFile:oldestFile] forDeviceId:[_uuid UUIDString]];
+        [_forwarder forwardLog:[NSData dataWithContentsOfFile:oldestFile] forDeviceId:_deviceName];
     }
     @catch (NSException *e) {
         [TeleportUtils teleportDebug:[NSString stringWithFormat:@"Exception: %@", e]];
@@ -117,10 +123,10 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
         [TeleportUtils teleportDebug:@"Error: %@", error];
         return [[NSArray alloc] init]; //return empty array in case of error
     }
-
+    
     NSPredicate *predicate = [NSPredicate predicateWithFormat:@"SELF EndsWith %@", suffix];
     filesArray =  [filesArray filteredArrayUsingPredicate:predicate];
-
+    
     NSMutableArray* filesAndProperties = [NSMutableArray arrayWithCapacity:[filesArray count]];
     
     for(NSString* file in filesArray) {
@@ -145,7 +151,7 @@ static const char* const TP_LOG_REAPING_QUEUE_NAME = "com.teleport.LogReaping";
                             ^(id path1, id path2)
                             {
                                 return [[path1 objectForKey:@"lastModDate"] compare:
-                                                           [path2 objectForKey:@"lastModDate"]];
+                                        [path2 objectForKey:@"lastModDate"]];
                             }];
     
     return sortedFiles;
